@@ -178,6 +178,12 @@ public partial class EnemyEditor : UserControl
         string description = null;
         string name = null;
 
+		if (type == 3 && Const.EnemyIcons.ContainsKey(id))
+		{
+			var viewer = new AnimationViewerWindow(id);
+			await viewer.ShowDialog(MainWindow.window);
+			return;
+		}
 
         if (description == null)
         {
@@ -188,8 +194,8 @@ public partial class EnemyEditor : UserControl
                 else
                     await MessageBox.Show(MainWindow.window, $"Tile Id - {icon.TileId:X} , Palette Id - {icon.PaletteId:X}", name);
             }
-        }
-    }
+		}
+	}
     #endregion Methods
 
     #region Events
@@ -212,7 +218,7 @@ public partial class EnemyEditor : UserControl
 
             int tileX = viewerX >> 8;   // 256-pixel screen index
             int tileY = viewerY >> 8;
-            int offX = viewerX & 0xFF;  // sub-screen offset (0–255)
+            int offX = viewerX & 0xFF;  // sub-screen offset (0ï¿½255)
             int offY = viewerY & 0xFF;
 
             const int ScreenSize = 256;

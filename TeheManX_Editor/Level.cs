@@ -1759,6 +1759,185 @@ namespace TeheManX_Editor
             }
             return name;
         }
-        #endregion Methods
-    }
+		#endregion Methods
+		#region SpriteDraw
+		public static int GetObjectFrameCount(int mainSpriteId) {
+			// Get the start of the sprite table.
+			int tableStart = SNES.CpuToOffset(
+				BinaryPrimitives.ReadInt32LittleEndian(
+					SNES.rom.AsSpan(mainSpriteId * 3 + Const.SpriteArrangmentPointersOffset)
+				)
+			);
+			// Find the lowest pointer table address above tableStart
+			// to know where this object's frame list ends.
+			int nextTableOffset = SNES.rom.Length;
+			for (int id = 0; id < 0x100; id++) {
+				if (id == mainSpriteId) continue;
+				int candidate = SNES.CpuToOffset(
+					BinaryPrimitives.ReadInt32LittleEndian(
+						SNES.rom.AsSpan(id * 3 + Const.SpriteArrangmentPointersOffset)
+					)
+				);
+				if (candidate > tableStart && candidate < nextTableOffset)
+					nextTableOffset = candidate;
+			}
+			// TODO: Check if this "Min" is really needed...
+			// Maybe something does use more than 64 frames just fine.
+			int maxEntries = Math.Min(64, (nextTableOffset - tableStart) / 3);
+			int validFrames = 0;
+
+			for (int i = 0; i < maxEntries; i++) {
+				int ptrOffset = tableStart + i * 3;
+				if (ptrOffset + 3 > SNES.rom.Length) break;
+
+				// TODO: Add a check here to really double check if we are in the correct bank.
+				/*byte bank = (byte)(cpuAddr >> 16);
+				byte lowBank = (byte)(bank & 0x7F);
+				if (lowBank < ??? || lowBank > ???) {
+					break;
+				}*/
+				// Exit if we overflow SNES rom size.
+				int cpuAddr = BinaryPrimitives.ReadInt32LittleEndian(SNES.rom.AsSpan(ptrOffset)) & 0xFFFFFF;
+				int subOffset = SNES.CpuToOffset(cpuAddr);
+				if (subOffset < 0 || subOffset >= SNES.rom.Length) {
+					break;
+				}
+				byte oamCount = SNES.rom[subOffset];
+				if (oamCount == 0 || oamCount > 64) {
+					break;
+				}
+				validFrames++;
+			}
+
+			return Math.Max(1, validFrames);
+		}
+
+		// Draws stuff itself.
+		public static async Task<(SKBitmap? Bitmap, int OriginX, int OriginY)> RenderEnemyFrameAsync(
+			int enemyId,  int frameIndex,
+			int? overrideTileId = null, int? overridePaletteId = null
+		) {
+			// Skip if no data is there.
+			if (!Const.EnemyIcons.ContainsKey(enemyId)) {
+				return (null, 0, 0);
+			}
+			// Set up the inital frame icon.
+			ObjectIcon baseIcon = Const.EnemyIcons[enemyId];
+			// Random variable starup thingy.
+			int stride = (Const.Id != Const.GameId.MegaManX3) ? 2 : 5;
+			int infoOffset = (enemyId - 1) * stride + Const.ObjectSpriteInfoOffset;
+			int mainSpriteId = SNES.rom[infoOffset];
+			int compressedTileId = overrideTileId ?? SNES.rom[infoOffset + 1];
+    		int paletteId = overridePaletteId ?? baseIcon.PaletteId;
+			// This is getting verbose... maybe a function for this would be better.
+			int mainSpriteOffset = SNES.CpuToOffset(
+				BinaryPrimitives.ReadInt32LittleEndian(
+					SNES.rom.AsSpan(mainSpriteId * 3 + Const.SpriteArrangmentPointersOffset)
+				)
+			);
+			int subSpriteOffset = SNES.CpuToOffset(
+				BinaryPrimitives.ReadInt32LittleEndian(SNES.rom.AsSpan(mainSpriteOffset + frameIndex * 3)
+				)
+			);
+			// Create a new one.
+			ObjectIcon frameIcon = new ObjectIcon(
+				baseIcon.PaletteId, baseIcon.TileBase, baseIcon.LoadFromTileSpec
+			);
+			frameIcon.ExtractSpriteData(mainSpriteId, subSpriteOffset, compressedTileId);
+			// Return null again if size is 0.
+			if (frameIcon.Width <= 0 || frameIcon.Height <= 0) {
+				return (null, 0, 0);
+			}
+			// Pallete loading.
+			uint[] palette = new uint[16 * 4];
+			int palPtrOffset = Const.PaletteInfoOffset + paletteId;
+			if (palPtrOffset >= 0 && palPtrOffset + 2 <= SNES.rom.Length) {
+				int infoOff = SNES.CpuToOffset(
+					BinaryPrimitives.ReadUInt16LittleEndian(
+						SNES.rom.AsSpan(palPtrOffset)
+					), Const.PaletteBank
+				);
+				// Continue as long we are not reading 0000.
+				while (infoOff >= 0 && infoOff + 4 <= SNES.rom.Length && SNES.rom[infoOff] != 0) {
+					int colorCount = SNES.rom[infoOff];
+					byte colorIndex = SNES.rom[infoOff + 3];
+					int colorOffset = SNES.CpuToOffset(
+						BinaryPrimitives.ReadUInt16LittleEndian(
+							SNES.rom.AsSpan(infoOff + 1)
+						) + (Const.PaletteColorBank << 16)
+					);
+					for (int c = 0; c < colorCount && c <= 15; c++) {
+						int dstIndex = c + colorIndex - 0x80;
+						if (dstIndex < 0 || dstIndex >= palette.Length ||
+							colorOffset + c * 2 + 2 > SNES.rom.Length
+						) {
+							continue;
+						}
+						// Load and convert to 24-bit. (What modern PCs use)
+						ushort color = BinaryPrimitives.ReadUInt16LittleEndian(
+							SNES.rom.AsSpan(colorOffset + c * 2)
+						);
+						byte R = ColorTools.To24Bit(color % 32);
+						byte G = ColorTools.To24Bit(color / 32 % 32);
+						byte B = ColorTools.To24Bit(color / 1024 % 32);
+						palette[dstIndex] = (uint)(0xFF000000 | (R << 16) | (G << 8) | B);
+					}
+					infoOff += 4;
+				}
+			}
+			// Decompress VRAM Tiles.
+			byte[] rawTiles = new byte[0x8000];
+			byte[] vramTiles = new byte[0x4000];
+			await DecompressTiles2(compressedTileId, rawTiles, 0);
+
+			if (frameIcon.LoadFromTileSpec) {
+				int specPtrOffset = Const.CompressedTilesSwapInfoOffset + compressedTileId * 2;
+				if (specPtrOffset >= 0 && specPtrOffset + 2 <= SNES.rom.Length) {
+					int specOffset = BinaryPrimitives.ReadUInt16LittleEndian(
+						SNES.rom.AsSpan(specPtrOffset)
+					) + Const.CompressedTilesSwapInfoOffset;
+					int srcOffset = 0;
+					while (specOffset >= 0 && specOffset + 2 <= SNES.rom.Length) {
+						int length = SNES.rom[specOffset];
+						if (length == 0) break;
+						if (length == 0xFF) { specOffset++; continue; }
+						length *= 16;
+
+						byte vramBaseHigh = SNES.rom[specOffset + 1];
+						int destOffset = (((vramBaseHigh & 0x7F) - 0x60) << 8) * 2;
+
+						if (srcOffset < rawTiles.Length && destOffset >= 0 &&
+							destOffset < vramTiles.Length && length > 0
+						) {
+							int safeLength = Math.Min(
+								length, Math.Min(rawTiles.Length - srcOffset, vramTiles.Length - destOffset)
+							);
+							Array.Copy(rawTiles, srcOffset, vramTiles, destOffset, safeLength);
+						}
+						if ((vramBaseHigh & 0x80) != 0)  { break; }
+						srcOffset += length;
+						specOffset += 2;
+					}
+				}
+			}
+			else {
+				int lengthTile = (Const.Id == Const.GameId.MegaManX)
+					? BinaryPrimitives.ReadUInt16LittleEndian(
+						SNES.rom.AsSpan(compressedTileId * 5 + Const.CompressedTileInfoOffset)
+					)
+					: BinaryPrimitives.ReadUInt16LittleEndian(
+						SNES.rom.AsSpan(compressedTileId * 5 + Const.CompressedTileInfoOffset + 3)
+					);
+				Array.Copy(rawTiles, 0, vramTiles, 0, (lengthTile / 0x20) * 0x20);
+			}
+			// Render frame bitmap and return offset.
+			SKBitmap bmp = new SKBitmap(
+				frameIcon.Width, frameIcon.Height, SKColorType.Bgra8888, SKAlphaType.Premul
+			);
+			ClearBitmap(bmp);
+			frameIcon.DumpSpriteToBitmap(bmp, 0, 0, vramTiles, palette);
+			return (bmp, -frameIcon.Left, -frameIcon.Top);
+		}
+		#endregion SpriteDraw
+	}
 }
