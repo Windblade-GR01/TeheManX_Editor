@@ -178,7 +178,7 @@ public partial class EnemyEditor : UserControl
         string description = null;
         string name = null;
 
-		if (type == 3 && Const.EnemyIcons.ContainsKey(id))
+		if (type == 3 && id > 0)
 		{
 			var viewer = new AnimationViewerWindow(id);
 			await viewer.ShowDialog(MainWindow.window);

@@ -12,12 +12,12 @@ using System.Threading.Tasks;
 namespace TeheManX_Editor.Forms;
 
 public partial class AnimationViewerWindow : Window {
-	private readonly int enemyId;
+	private int enemyId;
 	private int defaultTileId;
 	private int defaultPaletteId;
 	private int mainSpriteId;
 
-	private readonly List<(SKBitmap Bitmap, int OriginX, int OriginY)> frames = new();
+	private readonly List<(SKBitmap bitmap, int originX, int originY)> frames = new();
 	private readonly DispatcherTimer timer = new();
 	private int currentFrame = 0;
 	private bool isPlaying = true;
@@ -51,13 +51,14 @@ public partial class AnimationViewerWindow : Window {
 			int maxCompressedTiles = Const.Id switch {
 				Const.GameId.MegaManX => Const.MegaManX.CompressedTilesAmount - 1,
 				Const.GameId.MegaManX2 => Const.MegaManX2.CompressedTilesAmount - 1,
-				Const.GameId.MegaManX3 => Const.MegaManX3.CompressedTilesAmount - 1;
+				Const.GameId.MegaManX3 => Const.MegaManX3.CompressedTilesAmount - 1,
 				_ => 1
 			};
 
 			suppressEvents = true;
 			tileIdInt.Maximum = maxCompressedTiles;
 			tileIdInt.Value = defaultTileId;
+			enemyIdInt.Value = enemyId;
 			palIdInt.Value = defaultPaletteId;
 			suppressEvents = false;
 
@@ -72,8 +73,9 @@ public partial class AnimationViewerWindow : Window {
 	}
 
 	private void ClearFrames() {
-		foreach (var f in frames)
-			f.Bitmap?.Dispose();
+		foreach (var f in frames) {
+			f.bitmap?.Dispose();
+		}
 		frames.Clear();
 	}
 
@@ -87,8 +89,9 @@ public partial class AnimationViewerWindow : Window {
 
 		for (int i = 0; i < frameCount; i++) {
 			var frame = await Level.RenderEnemyFrameAsync(enemyId, i, tileId, palId);
-			if (frame.Bitmap != null)
+			if (frame.bitmap != null) {
 				frames.Add(frame);
+			}
 		}
 
 		if (frames.Count > 0) {
@@ -155,6 +158,27 @@ public partial class AnimationViewerWindow : Window {
 		canvas.DrawBitmap(bmp, -originX, -originY);
 		canvas.Restore();
 	}
+
+	private async void enemyIdInt_ValueChanged(object sender, int e) {
+		if (suppressEvents) { return; }
+		enemyId = e;
+		currentFrame = 0;
+
+		int stride = (Const.Id != Const.GameId.MegaManX3) ? 2 : 5;
+		int infoOffset = (enemyId - 1) * stride + Const.ObjectSpriteInfoOffset;
+		mainSpriteId = SNES.rom[infoOffset];
+		defaultTileId = SNES.rom[infoOffset + 1];
+		defaultPaletteId = Const.EnemyIcons.TryGetValue(enemyId, out var icon) ? icon.PaletteId : 0;
+
+		suppressEvents = true;
+		tileIdInt.Value = defaultTileId;
+		palIdInt.Value = defaultPaletteId;
+		suppressEvents = false;
+
+		infoText.Text = $"Sprite: 0x{mainSpriteId:X2}";
+		await ReloadFramesAsync();
+	}
+
 
 	private async void OverrideInt_ValueChanged(object sender, int e) {
 		if (suppressEvents) return;

@@ -1813,67 +1813,80 @@ namespace TeheManX_Editor
 		}
 
 		// Draws stuff itself.
-		public static async Task<(SKBitmap? Bitmap, int OriginX, int OriginY)> RenderEnemyFrameAsync(
-			int enemyId,  int frameIndex,
+		public static async Task<(SKBitmap? bitmap, int originX, int originY)> RenderEnemyFrameAsync(
+			int enemyId, int frameIndex,
 			int? overrideTileId = null, int? overridePaletteId = null
 		) {
-			// Skip if no data is there.
-			if (!Const.EnemyIcons.ContainsKey(enemyId)) {
-				return (null, 0, 0);
-			}
-			// Set up the inital frame icon.
-			ObjectIcon baseIcon = Const.EnemyIcons[enemyId];
+			Const.EnemyIcons.TryGetValue(enemyId, out ObjectIcon? baseIcon);
 			// Random variable starup thingy.
 			int stride = (Const.Id != Const.GameId.MegaManX3) ? 2 : 5;
 			int infoOffset = (enemyId - 1) * stride + Const.ObjectSpriteInfoOffset;
+			if (infoOffset < 0 || infoOffset + 2 > SNES.rom.Length) {
+				return (null, 0, 0);
+			}
 			int mainSpriteId = SNES.rom[infoOffset];
 			int compressedTileId = overrideTileId ?? SNES.rom[infoOffset + 1];
-    		int paletteId = overridePaletteId ?? baseIcon.PaletteId;
-			// This is getting verbose... maybe a function for this would be better.
+			int paletteId = overridePaletteId ?? baseIcon?.PaletteId ?? 0;
+			int tileBase = baseIcon?.TileBase ?? 0;
+			bool loadFromSpec = baseIcon?.LoadFromTileSpec ?? true;
+			// Get value offsets.
+			int spritePtrOffset = mainSpriteId * 3 + Const.SpriteArrangmentPointersOffset;
+			if (spritePtrOffset < 0 || spritePtrOffset + 3 > SNES.rom.Length) {
+				return (null, 0, 0);
+			}
 			int mainSpriteOffset = SNES.CpuToOffset(
-				BinaryPrimitives.ReadInt32LittleEndian(
-					SNES.rom.AsSpan(mainSpriteId * 3 + Const.SpriteArrangmentPointersOffset)
-				)
+				BinaryPrimitives.ReadInt32LittleEndian(SNES.rom.AsSpan(spritePtrOffset))
 			);
+			if (mainSpriteOffset < 0 || mainSpriteOffset + (frameIndex + 1) * 3 > SNES.rom.Length) {
+				return (null, 0, 0);
+			}
 			int subSpriteOffset = SNES.CpuToOffset(
-				BinaryPrimitives.ReadInt32LittleEndian(SNES.rom.AsSpan(mainSpriteOffset + frameIndex * 3)
-				)
-			);
-			// Create a new one.
-			ObjectIcon frameIcon = new ObjectIcon(
-				baseIcon.PaletteId, baseIcon.TileBase, baseIcon.LoadFromTileSpec
-			);
+				BinaryPrimitives.ReadInt32LittleEndian(SNES.rom.AsSpan(mainSpriteOffset + frameIndex * 3)));
+			if (subSpriteOffset < 0 || subSpriteOffset >= SNES.rom.Length) {
+				return (null, 0, 0);
+			}
+			ObjectIcon frameIcon = new ObjectIcon(paletteId, tileBase, loadFromSpec);
 			frameIcon.ExtractSpriteData(mainSpriteId, subSpriteOffset, compressedTileId);
-			// Return null again if size is 0.
-			if (frameIcon.Width <= 0 || frameIcon.Height <= 0) {
+			// Check if size is bounds.
+			// Is imposible for a sprite to be bigger than 512... at least a single one.
+			// So if we are loading it means we are loading grabled data.
+			if (frameIcon.Width <= 0 || frameIcon.Height <= 0 ||
+				frameIcon.Width > 512 || frameIcon.Height > 512
+			) {
 				return (null, 0, 0);
 			}
 			// Pallete loading.
+			// With a falls back to grayscale if paletteId is 0
+			// and no palette entry exists.
 			uint[] palette = new uint[16 * 4];
+			for (int i = 0; i < palette.Length; i++) {
+				byte shade = (byte)((i % 16) * 17);
+				palette[i] = (uint)(0xFF000000 | (shade << 16) | (shade << 8) | shade);
+			}
 			int palPtrOffset = Const.PaletteInfoOffset + paletteId;
+			// Check if in-bounds.
 			if (palPtrOffset >= 0 && palPtrOffset + 2 <= SNES.rom.Length) {
 				int infoOff = SNES.CpuToOffset(
-					BinaryPrimitives.ReadUInt16LittleEndian(
-						SNES.rom.AsSpan(palPtrOffset)
-					), Const.PaletteBank
+					BinaryPrimitives.ReadUInt16LittleEndian(SNES.rom.AsSpan(palPtrOffset)),
+					Const.PaletteBank
 				);
-				// Continue as long we are not reading 0000.
+				// Continue as long we are not reading 0 and still inside the rom.
 				while (infoOff >= 0 && infoOff + 4 <= SNES.rom.Length && SNES.rom[infoOff] != 0) {
 					int colorCount = SNES.rom[infoOff];
 					byte colorIndex = SNES.rom[infoOff + 3];
 					int colorOffset = SNES.CpuToOffset(
 						BinaryPrimitives.ReadUInt16LittleEndian(
-							SNES.rom.AsSpan(infoOff + 1)
-						) + (Const.PaletteColorBank << 16)
+							SNES.rom.AsSpan(infoOff + 1)) + (Const.PaletteColorBank << 16
+						)
 					);
 					for (int c = 0; c < colorCount && c <= 15; c++) {
+						// Check if valid.
 						int dstIndex = c + colorIndex - 0x80;
 						if (dstIndex < 0 || dstIndex >= palette.Length ||
-							colorOffset + c * 2 + 2 > SNES.rom.Length
-						) {
+							colorOffset + c * 2 + 2 > SNES.rom.Length) {
 							continue;
 						}
-						// Load and convert to 24-bit. (What modern PCs use)
+						// Convert what we find to 24 bit color. (What modern PC uses)
 						ushort color = BinaryPrimitives.ReadUInt16LittleEndian(
 							SNES.rom.AsSpan(colorOffset + c * 2)
 						);
@@ -1885,7 +1898,7 @@ namespace TeheManX_Editor
 					infoOff += 4;
 				}
 			}
-			// Decompress VRAM Tiles.
+			// Decompress and setup VRAM tiles.
 			byte[] rawTiles = new byte[0x8000];
 			byte[] vramTiles = new byte[0x4000];
 			await DecompressTiles2(compressedTileId, rawTiles, 0);
@@ -1897,6 +1910,7 @@ namespace TeheManX_Editor
 						SNES.rom.AsSpan(specPtrOffset)
 					) + Const.CompressedTilesSwapInfoOffset;
 					int srcOffset = 0;
+
 					while (specOffset >= 0 && specOffset + 2 <= SNES.rom.Length) {
 						int length = SNES.rom[specOffset];
 						if (length == 0) break;
@@ -1914,22 +1928,26 @@ namespace TeheManX_Editor
 							);
 							Array.Copy(rawTiles, srcOffset, vramTiles, destOffset, safeLength);
 						}
-						if ((vramBaseHigh & 0x80) != 0)  { break; }
+
+						if ((vramBaseHigh & 0x80) != 0) {
+							break;
+						}
 						srcOffset += length;
 						specOffset += 2;
 					}
 				}
+			} else {
+				// Diferent games use diferent offset.
+				int lengthTileOffset = Const.Id switch {
+					Const.GameId.MegaManX => 0,
+					_ => 3
+				};
+				int lengthTile = BinaryPrimitives.ReadUInt16LittleEndian(
+					SNES.rom.AsSpan(compressedTileId * 5 + Const.CompressedTileInfoOffset + lengthTileOffset)
+				);
+				Array.Copy(rawTiles, 0, vramTiles, 0, Math.Min(vramTiles.Length, (lengthTile / 0x20) * 0x20));
 			}
-			else {
-				int lengthTile = (Const.Id == Const.GameId.MegaManX)
-					? BinaryPrimitives.ReadUInt16LittleEndian(
-						SNES.rom.AsSpan(compressedTileId * 5 + Const.CompressedTileInfoOffset)
-					)
-					: BinaryPrimitives.ReadUInt16LittleEndian(
-						SNES.rom.AsSpan(compressedTileId * 5 + Const.CompressedTileInfoOffset + 3)
-					);
-				Array.Copy(rawTiles, 0, vramTiles, 0, (lengthTile / 0x20) * 0x20);
-			}
+
 			// Render frame bitmap and return offset.
 			SKBitmap bmp = new SKBitmap(
 				frameIcon.Width, frameIcon.Height, SKColorType.Bgra8888, SKAlphaType.Premul
@@ -1938,6 +1956,7 @@ namespace TeheManX_Editor
 			frameIcon.DumpSpriteToBitmap(bmp, 0, 0, vramTiles, palette);
 			return (bmp, -frameIcon.Left, -frameIcon.Top);
 		}
+
 		#endregion SpriteDraw
 	}
 }

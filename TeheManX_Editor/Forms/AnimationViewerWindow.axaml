@@ -11,6 +11,8 @@
 	<Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="10">
 		<!-- Header info -->
 		<StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="0,0,0,6">
+			<TextBlock Text="Enemy ID:" FontFamily="Consolas" Foreground="White" VerticalAlignment="Center"/>
+			<local:NumInt x:Name="enemyIdInt" Width="65" Height="28" FontSize="16" Minimum="1" Maximum="127" ValueChanged="enemyIdInt_ValueChanged"/>
 			<TextBlock x:Name="infoText" FontFamily="Consolas" FontSize="15" Foreground="White" VerticalAlignment="Center"/>
 			<CheckBox x:Name="originCheck" Content="Show Origin" IsChecked="False" Foreground="White" Checked="originCheck_Enable" Unchecked="originCheck_Disable"/>
 		</StackPanel>
